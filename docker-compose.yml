@@ -1,0 +1,168 @@
+version: "3.8"
+
+services:
+  api:
+    image: cc-053-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cc-053-api
+    ports:
+      - "9053:8000"
+    environment:
+      - SERVER_PORT=8000
+      - SERVER_HOST=0.0.0.0
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=dialect_corpus
+      - REDIS_ADDR=redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=dialect-corpus
+      - ASYNQ_CONCURRENCY=2
+      - EXTERNAL_URL=http://localhost:9053
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - audio-data:/tmp/audio
+    networks:
+      - cc-053-net
+
+  worker:
+    image: cc-053-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/worker"]
+    container_name: cc-053-worker
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=dialect_corpus
+      - REDIS_ADDR=redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=dialect-corpus
+      - ASYNQ_CONCURRENCY=2
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - audio-data:/tmp/audio
+    networks:
+      - cc-053-net
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: "1G"
+
+  beat:
+    image: cc-053-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/app", "health"]
+    container_name: cc-053-beat
+    profiles:
+      - optional
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=dialect_corpus
+      - REDIS_ADDR=redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - cc-053-net
+
+  db:
+    image: docker.m.daocloud.io/library/postgres:16-alpine
+    container_name: cc-053-db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=dialect_corpus
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - cc-053-net
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:7-alpine
+    container_name: cc-053-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redisdata:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - cc-053-net
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: cc-053-minio
+    ports:
+      - "9001:9000"
+      - "9002:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - miniodata:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - cc-053-net
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  audio-data:
+
+networks:
+  cc-053-net:
+    driver: bridge
