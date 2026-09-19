@@ -56,6 +56,11 @@ func main() {
 	arbitrationRepo := repository.NewArbitrationRepo(db)
 	exportRepo := repository.NewExportRepo(db)
 
+	// 调查点档案
+	countyRepo := repository.NewCountyRepo(db)
+	regionRepo := repository.NewRegionRepo(db)
+	surveyPointRepo := repository.NewSurveyPointRepo(db, regionRepo, countyRepo)
+
 	// Initialize MinIO service
 	minioSvc, err := services.NewMinIOService(cfg)
 	if err != nil {
@@ -89,6 +94,10 @@ func main() {
 	annotationHandler := handlers.NewAnnotationHandler(annotationRepo, segmentRepo)
 	arbitrationHandler := handlers.NewArbitrationHandler(arbitrationRepo, annotationRepo, segmentRepo)
 	exportHandler := handlers.NewExportHandler(exportRepo, exportSvc)
+
+	countyHandler := handlers.NewCountyHandler(countyRepo)
+	regionHandler := handlers.NewRegionHandler(regionRepo)
+	surveyPointHandler := handlers.NewSurveyPointHandler(surveyPointRepo)
 
 	// Setup Gin router
 	gin.SetMode(gin.ReleaseMode)
@@ -127,6 +136,27 @@ func main() {
 		v1.POST("/exports", exportHandler.Create)
 		v1.GET("/exports/:id", exportHandler.GetByID)
 		v1.GET("/exports", exportHandler.List)
+
+		// 方言调查点档案
+		v1.POST("/counties", countyHandler.Create)
+		v1.GET("/counties/:id", countyHandler.GetByID)
+		v1.GET("/counties", countyHandler.List)
+
+		v1.POST("/dialect-regions", regionHandler.Create)
+		v1.GET("/dialect-regions/:id", regionHandler.GetByID)
+		v1.GET("/dialect-regions", regionHandler.List)
+		v1.GET("/dialect-regions/tree", regionHandler.Tree)
+
+		v1.POST("/survey-points", surveyPointHandler.Create)
+		v1.GET("/survey-points", surveyPointHandler.List)
+		v1.POST("/survey-points/merge", surveyPointHandler.Merge)
+		v1.GET("/survey-points/merges", surveyPointHandler.MergeHistory)
+		v1.GET("/survey-points/:id", surveyPointHandler.GetByID)
+		v1.GET("/survey-points/:id/history", surveyPointHandler.History)
+		v1.GET("/survey-points/:id/assignments", surveyPointHandler.Assignments)
+		v1.GET("/survey-points/:id/assignment-at", surveyPointHandler.AssignmentAt)
+		v1.PUT("/survey-points/:id/assignment", surveyPointHandler.Adjust)
+		v1.POST("/survey-points/:id/records", surveyPointHandler.CreateRecord)
 	}
 
 	// Create HTTP server with proper timeouts for large file uploads

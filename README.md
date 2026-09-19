@@ -164,3 +164,49 @@ docker compose down             # 加 -v 一并清数据卷
   *.mp3
   ```
 - **安全自检**：`git status` 与镜像内均无真实录音文件；`docker history` 无密钥；`.env.example` 保留而 `.env` 被忽略
+
+## 13. 方言调查点档案（Survey Point Archive）
+
+在语音采集之外，新增一套「调查点档案」：记清每个点归在哪个县、属哪一片方言区，支持归属随时间调整、按当时回看、重名识别与档案合并。
+
+### 13.1 数据模型
+```
+counties(id, name, code)                                     县
+dialect_regions(id, name, code, level, parent_id, path[])    多级方言区（邻接表；无下级者为“叶子”）
+survey_points(id, name, code, county_id, status, merged_into_id)  调查点档案
+survey_point_aliases(id, point_id, name, fingerprint)        规范名/别名 + 名字指纹（全局唯一）
+point_assignments(id, point_id, region_id, effective_date, end_date)  归属时间线 SCD2（end_date NULL=现行）
+point_records(id, point_id, content, record_date,
+              snapshot_county, snapshot_region, snapshot_path)       已发说法 + 当时归属快照
+point_merges(id, surviving_point_id, merged_point_id,
+             surviving_before, merged_before, total_after)           合并审计（条数核对）
+```
+
+### 13.2 业务规则
+- **只能挂叶子区**：一个点只能挂在没有下级的最末一级区上；挂到“片/大区”当场返回 `409 not_leaf`。
+- **一点一区、挂重即报**：归属以 `[effective_date, end_date)` 不相交区间表达，唯一索引保证每点至多一条现行区间；同一生效日重复挂、回溯改史造成重叠，都在提交事务时返回 `409 overlap` 并指出冲突日期。
+- **调整写明生效日**：`PUT /survey-points/:id/assignment` 必须给 `effective_date`；旧区间在该日收口、新区间从该日起为现行。`GET .../assignment-at?date=` 按日期回看当时归属（左闭右开，生效日当天即算新归属）。
+- **已发说法不跟改**：说法在 `POST .../records` 建立时按 `record_date` 当时的县/区固化为快照；之后归属怎么调整，旧说法快照不变（DB 触发器禁止改快照字段，仅放行合并时转移 point_id，且禁止删除）。
+- **重名识别**：建档时把规范名与所有别名做指纹（全角转半角、繁/异体归并、去空白标点、转小写），命中任一既有档案即 `409 conflict`，并在 `detail` 里指出与哪个点的哪个名字重合。
+- **合并对条数**：两个其实是同一地方的档案可合并；事务内把说法与别名迁到存活点，并核对 `合并前两侧条数 == 合并后总条数`，不符整体回滚；被并点置 `merged` 并指向存活点，留 `point_merges` 审计。
+
+### 13.3 接口
+```
+POST/GET /api/v1/counties            县
+POST/GET /api/v1/dialect-regions     方言区（建子区时 level/path 自动继承）
+GET     /api/v1/dialect-regions/tree 方言区树（is_leaf 标记可挂点的叶子）
+POST/GET /api/v1/survey-points            建档（可 aliases；可带 region_id+effective_date 直接挂叶子）
+GET     /api/v1/survey-points/:id         档案详情（含现行归属、县、别名）
+PUT     /api/v1/survey-points/:id/assignment      调整归属（生效日必填）
+GET     /api/v1/survey-points/:id/assignments     归属时间线
+GET     /api/v1/survey-points/:id/assignment-at   按日期回看当时归属
+POST    /api/v1/survey-points/:id/records         登记说法（固化当时归属快照）
+GET     /api/v1/survey-points/:id/history         档案 + 时间线 + 说法
+POST    /api/v1/survey-points/merge               合并两个档案
+GET     /api/v1/survey-points/merges              合并审计
+```
+
+### 13.4 测试
+- `internal/repository/survey_test.go`：真实 PostgreSQL 上覆盖重名指纹、非叶子拒挂、时间线重叠/边界、as-of 回看、快照冻结（含触发器拦改删）、合并条数核对与别名归并、多维列表过滤。
+- `internal/handlers/survey_test.go`：经真实 Gin 路由跑端到端，校验 201/409/400 状态码与快照、合并结果。
+- 测试经 `internal/testsupport` 为每个包建独立数据库，`go test ./...` 并行不互相干扰；连接串可用 `TEST_DSN` / `TEST_ADMIN_DSN` 覆盖。
