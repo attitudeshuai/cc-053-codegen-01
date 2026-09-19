@@ -13,6 +13,7 @@ type Speaker struct {
 	Occupation       string    `json:"occupation"`
 	YearsAway        int       `json:"years_away"`
 	ContactRef       string    `json:"contact_ref,omitempty"`
+	SurveyPointID    *int64    `json:"survey_point_id,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }

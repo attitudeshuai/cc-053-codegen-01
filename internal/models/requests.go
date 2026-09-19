@@ -13,6 +13,7 @@ type CreateSpeakerRequest struct {
 	Occupation       string `json:"occupation"`
 	YearsAway        int    `json:"years_away"`
 	ContactRef       string `json:"contact_ref"`
+	SurveyPointID    *int64 `json:"survey_point_id"`
 }
 
 type CreateTaskRequest struct {

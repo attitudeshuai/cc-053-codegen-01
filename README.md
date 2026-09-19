@@ -55,6 +55,16 @@ segment(id, recording_id, entry_id, start_ms, end_ms, object_key, snr_db, status
 annotation(id, segment_id, annotator, ipa, tone, note, decision /* pending|accept|reject|arbitrated */, version)
 arbitration(id, segment_id, winner_annotation_id, arbiter, reason, created_at)
 export_job(id, filter jsonb, status, progress, output_key, created_at)
+
+# 方言调查点档案
+county(id, name, code UNIQUE, province)
+dialect_region(id, name, level, parent_id → dialect_region)   # 多级树，点只挂叶子
+survey_point(id, name, code UNIQUE, county_id → county, current_region_id → dialect_region,
+             merged_into → survey_point, note)               # merged_into=合并墓碑
+survey_point_alias(id, point_id → survey_point, name, UNIQUE(point_id, name))
+point_assignment_history(id, point_id, region_id, valid_from, valid_to,  # 半开区间时间线
+                         changed_by, reason)
+speaker(... survey_point_id → survey_point)                  # 可空，兼容历史数据
 ```
 
 ## 8. 关键实现点
@@ -119,6 +129,42 @@ docker compose down             # 加 -v 一并清数据卷
 ```
 
 **端到端链路**：容器内跑通「创建词表 → 上传长录音 → 自动切分 → 双人标注 → 仲裁 → 导出 zip」，1000 条录音切分抽检 > 95%；重启容器后任务队列不丢（Redis AOF 生效）；导出包字段与第 10 节一致。
+
+### 12.4.1 方言调查点档案（县 / 多级分区 / 归属时间线 / 异名合并）
+
+为每个调查点建立档案，记清「归哪个县、属哪一片方言区」：
+
+- **多级分区**：`dialect_regions` 为自引用树（level 1=大区，2=片，3=小片……），建区时层级必须紧邻父级；
+  **调查点只能挂在叶子（最细一级）分区上**，挂非叶子直接 400。
+- **唯一挂接 + 挂重当场拒绝**：归属用半开区间 `[valid_from, valid_to)` 时间线维护；同一天重复挂、
+  往回改日期、同区重复挂，一律 **409** 并在 `detail` 里指出冲突的既有记录 id。
+- **生效日必填语义**：调整归属必须带 `valid_from`（`YYYY-MM-DD`，缺省当天）；旧区间在当天封口、
+  新区间当天起算，历史行原样保留——**按当时归属回看（attribution），已发出的说法不随后续调整变化**。
+- **认重与合并**：建档时同县同名 / 名字命中他点别名即 409，提示合并入口；`merge` 在单事务内把
+  被并点的本名+别名、归属行、发音人（及下游 task/recording/segment/annotation）迁到保留点，
+  返回 `balanced` 与逐项条数；条数对不上返回 409，不静默成功。跨县默认拒绝自动合并。
+- **墓碑与自动归并**：被并点保留为墓碑（`merged_into`），旧名变别名；用旧 id 查询条数/回看历史
+  自动沿链归并，合并日之前的归属仍读旧点自己的历史行（说法不变），合并日之后回落实点。
+
+```
+POST /api/v1/counties                       建县
+POST /api/v1/regions                        建分区（name, level, parent_id?）
+GET  /api/v1/regions                        分区列表（含 is_leaf 标记）
+POST /api/v1/survey-points                  建点（name, code, county_id, region_id?, aliases?）
+GET  /api/v1/survey-points?county_id=&region_id=&q=
+PUT  /api/v1/survey-points/:id/assignment   调整归属（region_id, valid_from, changed_by?, reason?）
+GET  /api/v1/survey-points/:id/assignments  归属时间线
+GET  /api/v1/survey-points/:id/attribution?at=YYYY-MM-DD   按当时归属回看
+POST /api/v1/survey-points/merge            异名同地合并（kept_point_id, merged_point_id）
+GET  /api/v1/survey-points/:id/counts       关联条数（自动归并墓碑）
+```
+
+`speakers.survey_point_id` 为可空外键（兼容历史发音人），建发音人时可直接挂点；
+合并时发音人随点迁移，语料条数两边对得上。
+
+**自动验收**：起服务后运行 `bash tests/archive_e2e.sh`（默认打 `http://localhost:9053`，
+可用 `BASE_URL` 覆盖），覆盖层级断档、非叶子挂接、三种挂重 409、跨时点归属不变、
+重名拦截、合并对账等 38 项 HTTP 断言。
 
 ### 12.5 忽略文件（.dockerignore / .gitignore）
 

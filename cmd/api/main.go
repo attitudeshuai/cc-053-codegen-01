@@ -55,6 +55,9 @@ func main() {
 	annotationRepo := repository.NewAnnotationRepo(db)
 	arbitrationRepo := repository.NewArbitrationRepo(db)
 	exportRepo := repository.NewExportRepo(db)
+	countyRepo := repository.NewCountyRepo(db)
+	regionRepo := repository.NewRegionRepo(db)
+	surveyPointRepo := repository.NewSurveyPointRepo(db)
 
 	// Initialize MinIO service
 	minioSvc, err := services.NewMinIOService(cfg)
@@ -81,7 +84,7 @@ func main() {
 		},
 	)
 
-	speakerHandler := handlers.NewSpeakerHandler(speakerRepo)
+	speakerHandler := handlers.NewSpeakerHandler(speakerRepo, surveyPointRepo)
 	wordlistHandler := handlers.NewWordlistHandler(wordlistRepo)
 	taskHandler := handlers.NewTaskHandler(taskRepo)
 	recordingHandler := handlers.NewRecordingHandler(recordingRepo, taskRepo, minioSvc)
@@ -89,6 +92,7 @@ func main() {
 	annotationHandler := handlers.NewAnnotationHandler(annotationRepo, segmentRepo)
 	arbitrationHandler := handlers.NewArbitrationHandler(arbitrationRepo, annotationRepo, segmentRepo)
 	exportHandler := handlers.NewExportHandler(exportRepo, exportSvc)
+	archiveHandler := handlers.NewArchiveHandler(countyRepo, regionRepo, surveyPointRepo)
 
 	// Setup Gin router
 	gin.SetMode(gin.ReleaseMode)
@@ -127,6 +131,24 @@ func main() {
 		v1.POST("/exports", exportHandler.Create)
 		v1.GET("/exports/:id", exportHandler.GetByID)
 		v1.GET("/exports", exportHandler.List)
+
+		// 方言调查点档案：县 / 多级分区 / 调查点 / 归属时间线 / 异名合并
+		v1.POST("/counties", archiveHandler.CreateCounty)
+		v1.GET("/counties/:id", archiveHandler.GetCounty)
+		v1.GET("/counties", archiveHandler.ListCounties)
+
+		v1.POST("/regions", archiveHandler.CreateRegion)
+		v1.GET("/regions/:id", archiveHandler.GetRegion)
+		v1.GET("/regions", archiveHandler.ListRegions)
+
+		v1.POST("/survey-points", archiveHandler.CreatePoint)
+		v1.GET("/survey-points", archiveHandler.ListPoints)
+		v1.POST("/survey-points/merge", archiveHandler.MergePoints)
+		v1.GET("/survey-points/:id", archiveHandler.GetPoint)
+		v1.GET("/survey-points/:id/counts", archiveHandler.PointCounts)
+		v1.PUT("/survey-points/:id/assignment", archiveHandler.AssignRegion)
+		v1.GET("/survey-points/:id/assignments", archiveHandler.ListAssignments)
+		v1.GET("/survey-points/:id/attribution", archiveHandler.AssignmentAt)
 	}
 
 	// Create HTTP server with proper timeouts for large file uploads

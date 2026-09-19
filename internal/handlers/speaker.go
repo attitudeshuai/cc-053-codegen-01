@@ -11,11 +11,12 @@ import (
 )
 
 type SpeakerHandler struct {
-	repo *repository.SpeakerRepo
+	repo      *repository.SpeakerRepo
+	pointRepo *repository.SurveyPointRepo
 }
 
-func NewSpeakerHandler(repo *repository.SpeakerRepo) *SpeakerHandler {
-	return &SpeakerHandler{repo: repo}
+func NewSpeakerHandler(repo *repository.SpeakerRepo, pointRepo *repository.SurveyPointRepo) *SpeakerHandler {
+	return &SpeakerHandler{repo: repo, pointRepo: pointRepo}
 }
 
 func (h *SpeakerHandler) Create(c *gin.Context) {
@@ -23,6 +24,23 @@ func (h *SpeakerHandler) Create(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Code: 400, Message: "invalid request", Detail: err.Error()})
 		return
+	}
+
+	// 挂调查点时，必须是现存、未被合并的档案
+	if req.SurveyPointID != nil {
+		point, err := h.pointRepo.GetByID(*req.SurveyPointID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Code: 400, Message: "survey_point_id not found", Detail: err.Error()})
+			return
+		}
+		if point.MergedInto != nil {
+			c.JSON(http.StatusConflict, models.ErrorResponse{
+				Code:    409,
+				Message: "survey point has been merged; attach to the surviving point instead",
+				Detail:  "canonical point_id=" + strconv.FormatInt(*point.MergedInto, 10),
+			})
+			return
+		}
 	}
 
 	speaker := &models.Speaker{
@@ -33,6 +51,7 @@ func (h *SpeakerHandler) Create(c *gin.Context) {
 		Occupation:       req.Occupation,
 		YearsAway:        req.YearsAway,
 		ContactRef:       req.ContactRef,
+		SurveyPointID:    req.SurveyPointID,
 	}
 
 	if err := h.repo.Create(speaker); err != nil {
